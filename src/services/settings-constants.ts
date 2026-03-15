@@ -3,6 +3,9 @@ import type { RuntimeSecretKey, RuntimeFeatureId } from './runtime-config';
 export const SIGNUP_URLS: Partial<Record<RuntimeSecretKey, string>> = {
   GROQ_API_KEY: 'https://console.groq.com/keys',
   OPENROUTER_API_KEY: 'https://openrouter.ai/settings/keys',
+  LLM_API_URL: 'https://platform.openai.com/docs/api-reference/chat/create',
+  LLM_API_KEY: 'https://platform.openai.com/api-keys',
+  LLM_MODEL: 'https://platform.openai.com/docs/models',
   TAVILY_API_KEYS: 'https://app.tavily.com/home',
   BRAVE_API_KEYS: 'https://api-dashboard.search.brave.com/app/keys',
   SERPAPI_API_KEYS: 'https://serpapi.com/manage-api-key',
@@ -30,6 +33,8 @@ export const SIGNUP_URLS: Partial<Record<RuntimeSecretKey, string>> = {
 export const PLAINTEXT_KEYS = new Set<RuntimeSecretKey>([
   'OLLAMA_API_URL',
   'OLLAMA_MODEL',
+  'LLM_API_URL',
+  'LLM_MODEL',
   'WS_RELAY_URL',
   'VITE_OPENSKY_RELAY_URL',
 ]);
@@ -39,6 +44,9 @@ export const MASKED_SENTINEL = '__WM_MASKED__';
 export const HUMAN_LABELS: Record<RuntimeSecretKey, string> = {
   GROQ_API_KEY: 'Groq API Key',
   OPENROUTER_API_KEY: 'OpenRouter API Key',
+  LLM_API_URL: 'OpenAI-Compatible API URL',
+  LLM_API_KEY: 'OpenAI-Compatible API Key',
+  LLM_MODEL: 'OpenAI-Compatible Model',
   TAVILY_API_KEYS: 'Tavily API Keys',
   BRAVE_API_KEYS: 'Brave Search API Keys',
   SERPAPI_API_KEYS: 'SerpAPI Keys',
@@ -76,7 +84,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   {
     id: 'ai',
     label: 'AI & Summarization',
-    features: ['aiOllama', 'aiGroq', 'aiOpenRouter'],
+    features: ['aiOllama', 'aiGroq', 'aiOpenRouter', 'aiGeneric'],
   },
   {
     id: 'economy',

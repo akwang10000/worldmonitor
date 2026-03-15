@@ -4,6 +4,9 @@ import { invokeTauri } from './tauri-bridge';
 export type RuntimeSecretKey =
   | 'GROQ_API_KEY'
   | 'OPENROUTER_API_KEY'
+  | 'LLM_API_URL'
+  | 'LLM_API_KEY'
+  | 'LLM_MODEL'
   | 'TAVILY_API_KEYS'
   | 'BRAVE_API_KEYS'
   | 'SERPAPI_API_KEYS'
@@ -33,6 +36,7 @@ export type RuntimeSecretKey =
 export type RuntimeFeatureId =
   | 'aiGroq'
   | 'aiOpenRouter'
+  | 'aiGeneric'
   | 'stockNewsSearchTavily'
   | 'stockNewsSearchBrave'
   | 'stockNewsSearchSerpApi'
@@ -90,6 +94,7 @@ function getSidecarSecretValidateUrl(): string {
 const defaultToggles: Record<RuntimeFeatureId, boolean> = {
   aiGroq: true,
   aiOpenRouter: true,
+  aiGeneric: true,
   stockNewsSearchTavily: true,
   stockNewsSearchBrave: true,
   stockNewsSearchSerpApi: true,
@@ -135,6 +140,13 @@ export const RUNTIME_FEATURES: RuntimeFeatureDefinition[] = [
     name: 'OpenRouter summarization',
     description: 'Secondary LLM provider for AI summary fallback.',
     requiredSecrets: ['OPENROUTER_API_KEY'],
+    fallback: 'Falls back to local browser model only.',
+  },
+  {
+    id: 'aiGeneric',
+    name: 'OpenAI-compatible summarization',
+    description: 'Generic OpenAI-compatible chat completions endpoint for AI summary generation.',
+    requiredSecrets: ['LLM_API_URL', 'LLM_API_KEY'],
     fallback: 'Falls back to local browser model only.',
   },
   {
