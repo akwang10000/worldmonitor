@@ -5,6 +5,7 @@
 import { hashString } from './hash';
 
 export const CACHE_VERSION = 'v5';
+const TRANSLATE_CACHE_VERSION = 't2';
 
 const MAX_HEADLINE_LEN = 500;
 const MAX_HEADLINES_FOR_KEY = 5;
@@ -33,7 +34,7 @@ export function buildSummaryCacheKey(
 
   if (mode === 'translate') {
     const targetLang = normalizedVariant || normalizedLang;
-    return `summary:${CACHE_VERSION}:${mode}:${targetLang}:${hash}${geoHash}`;
+    return `summary:${CACHE_VERSION}:${mode}:${TRANSLATE_CACHE_VERSION}:${targetLang}:${hash}${geoHash}`;
   }
 
   return `summary:${CACHE_VERSION}:${mode}:${normalizedVariant}:${normalizedLang}:${hash}${geoHash}`;

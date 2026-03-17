@@ -105,13 +105,18 @@ Rules:
       : `Each headline is a separate story. What's the key pattern or risk?\n${headlineText}${intelSection}`;
   } else if (opts.mode === 'translate') {
     const targetLang = opts.variant;
-    systemPrompt = `You are a professional news translator. Translate the following news headlines/summaries into ${targetLang}.
+    systemPrompt = `You are a meticulous news translator for a global intelligence product. Translate the source text into ${targetLang}.
 Rules:
-- Maintain the original tone and journalistic style.
-- Do NOT add any conversational filler (e.g., "Here is the translation").
-- Output ONLY the translated text.
+- Translate faithfully. Do NOT summarize, paraphrase, explain, simplify, or add context.
+- Preserve names, places, organizations, stock tickers, hashtags, @handles, acronyms, dates, times, numbers, currencies, and quoted wording unless they should naturally be translated in news style.
+- Maintain the original tone, register, and headline style.
+- Do NOT add conversational filler, labels, quotation marks, or notes (for example: "Here is the translation", "Translation:", or "译文：").
+- Output ONLY the translated text, with no preamble or trailing commentary.
 - If the text is already in ${targetLang}, return it as is.`;
-    userPrompt = `Translate to ${targetLang}:\n${headlines[0]}`;
+    userPrompt = `Translate the text inside <source> into ${targetLang}. Return only the translation.
+<source>
+${headlines[0]}
+</source>`;
   } else {
     systemPrompt = isTechVariant
       ? `${dateContext}\n\nPick the most important tech headline and summarize it in 2 concise sentences (under 60 words). Each headline is a separate story - NEVER merge facts from different headlines. Focus on startups, AI, funding, products. Ignore politics unless directly about tech regulation.${langInstruction}`

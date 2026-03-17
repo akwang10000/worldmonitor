@@ -257,3 +257,46 @@ describe('Fix 4: cache version bump', () => {
       'CACHE_VERSION must be v5 to invalidate entries from old conflating prompts');
   });
 });
+
+// ========================================================================
+// Translation quality safeguards
+// ========================================================================
+
+describe('Translation quality safeguards', () => {
+  const promptSrc = readSrc('server/worldmonitor/news/v1/_shared.ts');
+  const handlerSrc = readSrc('server/worldmonitor/news/v1/summarize-article.ts');
+  const cacheKeySrc = readSrc('src/utils/summary-cache-key.ts');
+  const clientSrc = readSrc('src/services/summarization.ts');
+
+  it('translate prompt forbids summarization/paraphrasing', () => {
+    assert.match(promptSrc, /Do NOT summarize, paraphrase, explain, simplify, or add context/i);
+  });
+
+  it('translate prompt preserves entities and numbers', () => {
+    assert.match(promptSrc, /Preserve names, places, organizations, stock tickers/i);
+  });
+
+  it('translate prompt wraps source text in explicit tags', () => {
+    assert.match(promptSrc, /<source>/);
+    assert.match(promptSrc, /<\/source>/);
+  });
+
+  it('translation responses strip filler preambles', () => {
+    assert.match(handlerSrc, /TRANSLATION_PREAMBLE/);
+    assert.match(handlerSrc, /normalizeTranslationOutput/);
+  });
+
+  it('translate mode uses dedicated lower-temperature settings', () => {
+    assert.match(handlerSrc, /const isTranslateMode = mode === 'translate'/);
+    assert.match(handlerSrc, /const temperature = isTranslateMode \? 0\.05 : 0\.3/);
+    assert.match(handlerSrc, /const maxTokens = isTranslateMode \? 220 : 100/);
+  });
+
+  it('translation cache key has a dedicated translate cache version', () => {
+    assert.match(cacheKeySrc, /TRANSLATE_CACHE_VERSION\s*=\s*'t2'/);
+  });
+
+  it('client translation provider order prefers higher-quality remote providers first', () => {
+    assert.match(clientSrc, /TRANSLATION_PROVIDER_ORDER:[^=]+=\s*\['generic', 'openrouter', 'groq', 'ollama'\]/);
+  });
+});

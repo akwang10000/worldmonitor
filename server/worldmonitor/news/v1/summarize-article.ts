@@ -21,10 +21,53 @@ import { isProviderAvailable } from '../../../_shared/llm-health';
 
 export const TASK_NARRATION = /^(we need to|i need to|let me|i'll |i should|i will |the task is|the instructions|according to the rules|so we need to|okay[,.]\s*(i'll|let me|so|we need|the task|i should|i will)|sure[,.]\s*(i'll|let me|so|we need|the task|i should|i will|here)|first[, ]+(i|we|let)|to summarize (the headlines|the task|this)|my task (is|was|:)|step \d)/i;
 export const PROMPT_ECHO = /^(summarize the top story|summarize the key|rules:|here are the rules|the top story is likely)/i;
+export const TRANSLATION_PREAMBLE = /^(?:here(?:'s| is)? (?:the )?translation\b|translation\b(?:\s+to\s+\w+)?[:：-]?|translated (?:text|headline|summary)\b[:：-]?|译文[:：-]?|翻译[:：-]?|以下(?:是)?(?:译文|翻译)[:：-]?)/i;
 
 export function hasReasoningPreamble(text: string): boolean {
   const trimmed = text.trim();
   return TASK_NARRATION.test(trimmed) || PROMPT_ECHO.test(trimmed);
+}
+
+function normalizeTranslationOutput(text: string): string {
+  let normalized = text.trim();
+  normalized = normalized.replace(TRANSLATION_PREAMBLE, '').trim();
+
+  const quotePairs: Array<[string, string]> = [
+    ['"', '"'],
+    ['“', '”'],
+    ['‘', '’'],
+    ['「', '」'],
+    ['『', '』'],
+  ];
+
+  for (const [open, close] of quotePairs) {
+    if (normalized.startsWith(open) && normalized.endsWith(close) && normalized.length > 2) {
+      normalized = normalized.slice(open.length, normalized.length - close.length).trim();
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function isLikelyUntranslatedCopy(source: string, translated: string, targetLang: string): boolean {
+  if (!source || !translated || targetLang.toLowerCase() === 'en') return false;
+
+  const normalize = (value: string) => value
+    .toLowerCase()
+    .replace(/[“”"'‘’`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const normalizedSource = normalize(source);
+  const normalizedTranslated = normalize(translated);
+  if (!normalizedSource || normalizedSource !== normalizedTranslated) return false;
+
+  const sourceWordCount = source.trim().split(/\s+/).filter(Boolean).length;
+  const asciiLetters = (source.match(/[A-Za-z]/g) ?? []).length;
+  const nonAsciiLetters = (source.match(/[^\x00-\x7F]/g) ?? []).length;
+
+  return sourceWordCount >= 4 && asciiLetters >= 12 && nonAsciiLetters === 0;
 }
 
 // ======================================================================
@@ -89,6 +132,10 @@ export async function summarizeArticle(
 
   try {
     const cacheKey = getCacheKey(headlines, mode, sanitizedGeoContext, variant, lang);
+    const isTranslateMode = mode === 'translate';
+    const maxTokens = isTranslateMode ? 220 : 100;
+    const temperature = isTranslateMode ? 0.05 : 0.3;
+    const topP = isTranslateMode ? 0.4 : 0.9;
 
     // Single atomic call — source tracking happens inside cachedFetchJsonWithMeta,
     // eliminating the TOCTOU race between a separate getCachedJson and cachedFetchJson.
@@ -115,9 +162,9 @@ export async function summarizeArticle(
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userPrompt },
             ],
-            temperature: 0.3,
-            max_tokens: 100,
-            top_p: 0.9,
+            temperature,
+            max_tokens: maxTokens,
+            top_p: topP,
             ...extraBody,
           }),
           signal: AbortSignal.timeout(25_000),
@@ -150,6 +197,22 @@ export async function summarizeArticle(
           .replace(/<reflection>[\s\S]*/gi, '')
           .replace(/<\|begin_of_thought\|>[\s\S]*/gi, '')
           .trim();
+
+        if (isTranslateMode) {
+          rawContent = normalizeTranslationOutput(rawContent);
+          if (!rawContent) {
+            console.warn(`[SummarizeArticle:${provider}] Empty translation after normalization, rejecting`);
+            return null;
+          }
+          if (TRANSLATION_PREAMBLE.test(rawContent)) {
+            console.warn(`[SummarizeArticle:${provider}] Translation preamble detected, rejecting`);
+            return null;
+          }
+          if (isLikelyUntranslatedCopy(headlines[0] || '', rawContent, variant)) {
+            console.warn(`[SummarizeArticle:${provider}] Translation appears unchanged from source, rejecting`);
+            return null;
+          }
+        }
 
         if (['brief', 'analysis'].includes(mode) && rawContent.length < 20) {
           console.warn(`[SummarizeArticle:${provider}] Output too short after stripping (${rawContent.length} chars), rejecting`);

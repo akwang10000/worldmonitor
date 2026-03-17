@@ -63,6 +63,11 @@ const API_PROVIDERS: ApiProviderDef[] = [
   { featureId: 'aiGeneric',     provider: 'generic',    label: 'OpenAI Compatible API' },
 ];
 
+const TRANSLATION_PROVIDER_ORDER: SummarizationProvider[] = ['generic', 'openrouter', 'groq', 'ollama'];
+const TRANSLATION_API_PROVIDERS: ApiProviderDef[] = TRANSLATION_PROVIDER_ORDER
+  .map((provider) => API_PROVIDERS.find((entry) => entry.provider === provider))
+  .filter((entry): entry is ApiProviderDef => Boolean(entry));
+
 let lastAttemptedProvider = 'none';
 
 // ── Unified API provider caller (via SummarizeArticle RPC) ──
@@ -297,8 +302,8 @@ export async function translateText(
 ): Promise<string | null> {
   if (!text) return null;
 
-  const totalSteps = API_PROVIDERS.length;
-  for (const [i, providerDef] of API_PROVIDERS.entries()) {
+  const totalSteps = TRANSLATION_API_PROVIDERS.length;
+  for (const [i, providerDef] of TRANSLATION_API_PROVIDERS.entries()) {
     if (!isFeatureAvailable(providerDef.featureId)) continue;
 
     onProgress?.(i + 1, totalSteps, `Translating with ${providerDef.label}...`);
