@@ -525,10 +525,12 @@ async function handleSpike(spike: TrendingSpike, config: TrendingConfig): Promis
     const now = Date.now();
     if (config.autoSummarize && headlines.length >= 2 && canRunAutoSummary(now)) {
       autoSummaryRuns.push(now);
+      const { getCurrentLanguage } = await import('@/services/i18n');
       const summary = await generateSummary(
         headlines,
         undefined,
-        `Breaking: "${spike.term}" mentioned ${spike.count}x in ${windowHours}h (${multiplierText})`
+        `Breaking: "${spike.term}" mentioned ${spike.count}x in ${windowHours}h (${multiplierText})`,
+        getCurrentLanguage()
       );
       if (summary?.summary) {
         description = summary.summary;

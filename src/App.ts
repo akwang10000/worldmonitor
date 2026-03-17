@@ -31,6 +31,7 @@ import { BETA_MODE } from '@/config/beta';
 import { trackEvent, trackDeeplinkOpened } from '@/services/analytics';
 import { preloadCountryGeometry, getCountryNameByCode } from '@/services/country-geometry';
 import { initI18n } from '@/services/i18n';
+import { translateCommonVisibleElements } from '@/services';
 
 import { computeDefaultDisabledSources, getLocaleBoostedSources, getTotalFeedCount } from '@/config/feeds';
 import { fetchBootstrapData } from '@/services/bootstrap';
@@ -74,13 +75,61 @@ export class App {
   private unsubAiFlow: (() => void) | null = null;
   private visiblePanelPrimed = new Set<string>();
   private visiblePanelPrimeRaf: number | null = null;
+  private mainContentEl: HTMLElement | null = null;
+  private panelVisibilityObserver: IntersectionObserver | null = null;
+  private contentMutationObserver: MutationObserver | null = null;
   private readonly handleViewportPrime = (): void => {
     if (this.visiblePanelPrimeRaf !== null) return;
     this.visiblePanelPrimeRaf = window.requestAnimationFrame(() => {
       this.visiblePanelPrimeRaf = null;
       void this.primeVisiblePanelData();
+      void this.translateVisibleContent();
     });
   };
+
+  private handleVisiblePanelIntersection = (entries: IntersectionObserverEntry[]): void => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      this.handleViewportPrime();
+    }
+  };
+
+  private handleContentMutations = (mutations: MutationRecord[]): void => {
+    const hasElementInsertions = mutations.some((mutation) =>
+      Array.from(mutation.addedNodes).some((node) => node instanceof HTMLElement),
+    );
+    if (hasElementInsertions) {
+      this.handleViewportPrime();
+    }
+  };
+
+  private async translateVisibleContent(): Promise<void> {
+    const container = this.mainContentEl ?? document.querySelector<HTMLElement>('.main-content');
+    if (!container) return;
+    this.mainContentEl = container;
+    await translateCommonVisibleElements(container, { limit: 20 });
+  }
+
+  private setupVisibleTranslationObservers(): void {
+    if (!this.mainContentEl) return;
+
+    this.panelVisibilityObserver?.disconnect();
+    this.panelVisibilityObserver = new IntersectionObserver(this.handleVisiblePanelIntersection, {
+      root: null,
+      threshold: 0.05,
+      rootMargin: '120px 0px',
+    });
+
+    this.mainContentEl.querySelectorAll<HTMLElement>('.panel').forEach((panel) => {
+      this.panelVisibilityObserver?.observe(panel);
+    });
+
+    this.contentMutationObserver?.disconnect();
+    this.contentMutationObserver = new MutationObserver(this.handleContentMutations);
+    this.contentMutationObserver.observe(this.mainContentEl, {
+      childList: true,
+      subtree: true,
+    });
+  }
 
   private isPanelNearViewport(panelId: string, marginPx = 400): boolean {
     const panel = this.state.panels[panelId] as { isNearViewport?: (marginPx?: number) => boolean } | undefined;
@@ -547,6 +596,8 @@ export class App {
 
     // Phase 1: Layout (creates map + panels — they'll find hydrated data)
     this.panelLayout.init();
+    this.mainContentEl = document.querySelector<HTMLElement>('.main-content');
+    this.setupVisibleTranslationObservers();
     showProBanner(this.state.container);
 
     const mobileGeoCoords = await geoCoordsPromise;
@@ -632,10 +683,12 @@ export class App {
     // panels from being blocked when a loadAllData batch is slow.
     window.addEventListener('scroll', this.handleViewportPrime, { passive: true });
     window.addEventListener('resize', this.handleViewportPrime);
+    this.mainContentEl?.addEventListener('scroll', this.handleViewportPrime, { passive: true });
     await Promise.all([
       this.dataLoader.loadAllData(true),
       this.primeVisiblePanelData(true),
     ]);
+    this.handleViewportPrime();
 
     // Initial correlation engine run
     if (this.state.correlationEngine) {
@@ -680,6 +733,12 @@ export class App {
     this.state.isDestroyed = true;
     window.removeEventListener('scroll', this.handleViewportPrime);
     window.removeEventListener('resize', this.handleViewportPrime);
+    this.mainContentEl?.removeEventListener('scroll', this.handleViewportPrime);
+    this.panelVisibilityObserver?.disconnect();
+    this.panelVisibilityObserver = null;
+    this.contentMutationObserver?.disconnect();
+    this.contentMutationObserver = null;
+    this.mainContentEl = null;
     if (this.visiblePanelPrimeRaf !== null) {
       window.cancelAnimationFrame(this.visiblePanelPrimeRaf);
       this.visiblePanelPrimeRaf = null;

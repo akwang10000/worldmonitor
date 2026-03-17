@@ -234,7 +234,7 @@ async function generateSummaryInternal(
 
       // Warm model failed inference -- fallback through API providers
       if (!options?.skipCloudProviders) {
-        const chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, undefined, onProgress, 2, totalSteps);
+        const chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, lang, onProgress, 2, totalSteps);
         if (chainResult) return chainResult;
       }
     } else {
@@ -245,7 +245,7 @@ async function generateSummaryInternal(
 
       // API providers while model loads
       if (!options?.skipCloudProviders) {
-        const chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, undefined, onProgress, 1, totalSteps);
+        const chainResult = await runApiChain(API_PROVIDERS, headlines, geoContext, lang, onProgress, 1, totalSteps);
         if (chainResult) {
           return chainResult;
         }

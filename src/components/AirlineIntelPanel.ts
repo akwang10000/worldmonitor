@@ -15,6 +15,8 @@ import {
     type FlightDelaySeverity,
 } from '@/services/aviation';
 import { aviationWatchlist } from '@/services/aviation/watchlist';
+import { translateVisibleElements } from '@/services';
+import { rafSchedule } from '@/utils';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
 import { Panel } from './Panel';
@@ -82,6 +84,15 @@ export class AirlineIntelPanel extends Panel {
     private refreshTimer: ReturnType<typeof setInterval> | null = null;
     private liveIndicator!: HTMLElement;
     private tabBar!: HTMLElement;
+    private boundScrollHandler: (() => void) | null = null;
+    private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+    private readonly runVisibleTranslationPass = rafSchedule(() => {
+        if (!this.element?.isConnected) return;
+        void translateVisibleElements(this.element, {
+            selector: '.panel-tab, .news-link[data-translate-source], #priceSearchBtn',
+            limit: 10,
+        });
+    });
 
     constructor() {
         super({ id: 'airline-intel', title: t('panels.airlineIntel'), trackActivity: true });
@@ -111,6 +122,7 @@ export class AirlineIntelPanel extends Panel {
             const btn = document.createElement('button');
             btn.className = `panel-tab${tab === this.activeTab ? ' active' : ''}`;
             btn.textContent = TAB_LABELS[tab];
+            btn.dataset.translateSource = TAB_LABELS[tab];
             btn.dataset.tab = tab;
             btn.addEventListener('click', () => this.switchTab(tab as Tab));
             this.tabBar.appendChild(btn);
@@ -119,6 +131,8 @@ export class AirlineIntelPanel extends Panel {
 
         // Add styling class to inherited content div
         this.content.classList.add('airline-intel-content');
+        this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+        this.content.addEventListener('scroll', this.boundScrollHandler);
 
         // Event delegation on stable content element (survives innerHTML replacements)
         this.content.addEventListener('click', (e) => {
@@ -136,6 +150,18 @@ export class AirlineIntelPanel extends Panel {
 
         // Auto-refresh every 5 min — refresh() loads ops + active tab
         this.refreshTimer = setInterval(() => void this.refresh(), 5 * 60_000);
+        this.scheduleVisibleTranslations();
+    }
+
+    private scheduleVisibleTranslations(delay = 220): void {
+        if (this.visibleTranslationTimer) {
+            clearTimeout(this.visibleTranslationTimer);
+        }
+
+        this.visibleTranslationTimer = setTimeout(() => {
+            this.visibleTranslationTimer = null;
+            this.runVisibleTranslationPass();
+        }, Math.max(0, delay));
     }
 
     toggle(visible: boolean): void {
@@ -144,6 +170,15 @@ export class AirlineIntelPanel extends Panel {
 
     destroy(): void {
         if (this.refreshTimer) clearInterval(this.refreshTimer);
+        if (this.boundScrollHandler) {
+            this.content.removeEventListener('scroll', this.boundScrollHandler);
+            this.boundScrollHandler = null;
+        }
+        if (this.visibleTranslationTimer) {
+            clearTimeout(this.visibleTranslationTimer);
+            this.visibleTranslationTimer = null;
+        }
+        this.runVisibleTranslationPass.cancel();
         super.destroy();
     }
 
@@ -236,6 +271,7 @@ export class AirlineIntelPanel extends Panel {
             case 'news': this.renderNews(); break;
             case 'prices': this.renderPrices(); break;
         }
+        this.scheduleVisibleTranslations();
     }
 
     // ---- Ops tab ----
@@ -317,7 +353,7 @@ export class AirlineIntelPanel extends Panel {
         }
         const items = this.newsData.map(n => `
       <div class="news-item" style="padding:8px 0;border-bottom:1px solid var(--border,#2a2a2a)">
-        <a href="${sanitizeUrl(n.url)}" target="_blank" rel="noopener" class="news-link">${escapeHtml(n.title)}</a>
+        <a href="${sanitizeUrl(n.url)}" target="_blank" rel="noopener" class="news-link" data-translate-source="${escapeHtml(n.title)}">${escapeHtml(n.title)}</a>
         <div class="news-meta" style="font-size:11px;color:var(--text-dim,#888);margin-top:2px">${escapeHtml(n.sourceName)} · ${n.publishedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
       </div>`).join('');
         this.content.innerHTML = `<div class="news-list" style="padding:0 4px">${items}</div>`;

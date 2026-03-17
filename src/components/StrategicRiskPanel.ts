@@ -1,7 +1,8 @@
 import { Panel } from './Panel';
 import { escapeHtml } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
-import { getCSSColor } from '@/utils';
+import { translateVisibleElements } from '@/services';
+import { getCSSColor, rafSchedule } from '@/utils';
 import {
   calculateStrategicRiskOverview,
   getRecentAlerts,
@@ -33,6 +34,15 @@ export class StrategicRiskPanel extends Panel {
   private breakingAlerts: Map<string, { threatLevel: 'critical' | 'high'; timestamp: number }> = new Map();
   private boundOnBreaking: ((e: Event) => void) | null = null;
   private breakingExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateVisibleElements(this.content, {
+      selector: '.risk-alert-title[data-translate-source], .risk-alert-summary[data-translate-source], .risk-action-btn, .risk-refresh-btn',
+      limit: 10,
+    });
+  });
 
   constructor() {
     super({
@@ -42,7 +52,20 @@ export class StrategicRiskPanel extends Panel {
       trackActivity: true,
       infoTooltip: t('components.strategicRisk.infoTooltip'),
     });
+    this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+    this.content.addEventListener('scroll', this.boundScrollHandler);
     this.init();
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   private async init(): Promise<void> {
@@ -422,10 +445,10 @@ export class StrategicRiskPanel extends Panel {
                 <div class="risk-alert-header">
                   <span class="risk-alert-type">${this.getTypeEmoji(alert.type)}</span>
                   <span class="risk-alert-priority">${this.getPriorityEmoji(alert.priority)}</span>
-                  <span class="risk-alert-title">${escapeHtml(alert.title)}</span>
+                  <span class="risk-alert-title" data-translate-source="${escapeHtml(alert.title)}">${escapeHtml(alert.title)}</span>
                   ${hasLocation ? '<span class="risk-location-icon">↗</span>' : ''}
                 </div>
-                <div class="risk-alert-summary">${escapeHtml(alert.summary)}</div>
+                <div class="risk-alert-summary" data-translate-source="${escapeHtml(alert.summary)}">${escapeHtml(alert.summary)}</div>
                 <div class="risk-alert-time">${this.formatTime(alert.timestamp)}</div>
               </div>
             `;
@@ -466,6 +489,7 @@ export class StrategicRiskPanel extends Panel {
 
       this.content.innerHTML = html;
       this.attachEventListeners();
+      this.scheduleVisibleTranslations();
     } catch (e: unknown) {
       console.error('[StrategicRiskPanel] Render error:', e);
       this.showError(t('common.failedRiskOverview'), () => this.refresh());
@@ -548,6 +572,15 @@ export class StrategicRiskPanel extends Panel {
     if (this.unsubscribeFreshness) {
       this.unsubscribeFreshness();
     }
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
     super.destroy();
   }
 

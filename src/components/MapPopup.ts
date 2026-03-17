@@ -7,8 +7,9 @@ import type { StartupHub, Accelerator, TechHQ, CloudRegion } from '@/config/tech
 import type { TechHubActivity } from '@/services/tech-activity';
 import type { GeoHubActivity } from '@/services/geo-activity';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
-import { isMobileDevice, getCSSColor } from '@/utils';
+import { isMobileDevice, getCSSColor, rafSchedule } from '@/utils';
 import { t } from '@/services/i18n';
+import { translateVisibleElements } from '@/services';
 import { fetchHotspotContext, formatArticleDate, extractDomain, type GdeltArticle } from '@/services/gdelt-intel';
 import { getNaturalEventIcon } from '@/services/eonet';
 import { getHotspotEscalation, getEscalationChange24h } from '@/services/hotspot-escalation';
@@ -161,10 +162,37 @@ export class MapPopup {
   private sheetCurrentOffset = 0;
   private readonly mobileDismissThreshold = 96;
   private outsideListenerTimeoutId: number | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.popup?.isConnected) return;
+    void translateVisibleElements(this.popup, {
+      selector: '.popup-description, .why-matters-text, .history-value, .news-title, .article-title, .cluster-toggle',
+      limit: 14,
+    });
+  });
 
   constructor(container: HTMLElement) {
     this.container = container;
   }
+
+  private scheduleVisibleTranslations(delay = 180): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
+  }
+
+  private handlePopupBodyScroll = (): void => {
+    this.scheduleVisibleTranslations(60);
+  };
+
+  private handlePopupSectionToggle = (): void => {
+    this.scheduleVisibleTranslations(30);
+  };
 
   public show(data: PopupData): void {
     this.hide();
@@ -192,6 +220,10 @@ export class MapPopup {
     // Append to body to avoid container overflow clipping
     document.body.appendChild(this.popup);
 
+    const popupBody = this.popup.querySelector<HTMLElement>('.popup-body');
+    popupBody?.addEventListener('scroll', this.handlePopupBodyScroll);
+    this.popup.addEventListener('toggle', this.handlePopupSectionToggle, true);
+
     // Close button handler via event delegation on the popup element.
     // This avoids re-querying and re-attaching listeners after innerHTML.
     this.popup.addEventListener('click', (e) => {
@@ -206,7 +238,14 @@ export class MapPopup {
         if (!hidden) return;
         const expanded = hidden.style.display !== 'none';
         hidden.style.display = expanded ? 'none' : '';
-        toggle.textContent = expanded ? (toggle.dataset.more ?? '') : (toggle.dataset.less ?? '');
+        const nextLabel = expanded ? (toggle.dataset.more ?? '') : (toggle.dataset.less ?? '');
+        toggle.textContent = nextLabel;
+        if (nextLabel) {
+          toggle.dataset.translateSource = nextLabel;
+          delete toggle.dataset.translatedLang;
+          delete toggle.dataset.translationFailedLang;
+        }
+        this.scheduleVisibleTranslations(30);
       }
     });
 
@@ -235,6 +274,7 @@ export class MapPopup {
       document.addEventListener('keydown', this.handleEscapeKey);
       this.outsideListenerTimeoutId = null;
     }, 0);
+    this.scheduleVisibleTranslations();
   }
 
   private positionDesktopPopup(data: PopupData, containerRect: DOMRect): void {
@@ -357,6 +397,9 @@ export class MapPopup {
     }
 
     if (this.popup) {
+      const popupBody = this.popup.querySelector<HTMLElement>('.popup-body');
+      popupBody?.removeEventListener('scroll', this.handlePopupBodyScroll);
+      this.popup.removeEventListener('toggle', this.handlePopupSectionToggle, true);
       this.popup.removeEventListener('touchstart', this.handleSheetTouchStart);
       this.popup.removeEventListener('touchmove', this.handleSheetTouchMove);
       this.popup.removeEventListener('touchend', this.handleSheetTouchEnd);
@@ -371,6 +414,11 @@ export class MapPopup {
       document.removeEventListener('keydown', this.handleEscapeKey);
       this.onClose?.();
     }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
   }
 
   public setOnClose(callback: () => void): void {
@@ -765,6 +813,7 @@ export class MapPopup {
           <div class="hotspot-gdelt-header">${t('popups.liveIntel')}</div>
           <div class="hotspot-gdelt-loading">${t('popups.noCoverage')}</div>
         `;
+        this.scheduleVisibleTranslations(0);
         return;
       }
 
@@ -774,12 +823,14 @@ export class MapPopup {
           ${articles.slice(0, 5).map(article => this.renderGdeltArticle(article)).join('')}
         </div>
       `;
+      this.scheduleVisibleTranslations(0);
     } catch (error) {
       if (container.isConnected) {
         container.innerHTML = `
           <div class="hotspot-gdelt-header">${t('popups.liveIntel')}</div>
           <div class="hotspot-gdelt-loading">${t('common.error')}</div>
         `;
+        this.scheduleVisibleTranslations(0);
       }
     }
   }

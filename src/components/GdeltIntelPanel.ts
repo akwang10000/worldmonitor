@@ -1,4 +1,6 @@
 import { Panel } from './Panel';
+import { translateCommonVisibleElements } from '@/services';
+import { rafSchedule } from '@/utils';
 import { sanitizeUrl } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
 import { h, replaceChildren } from '@/utils/dom-utils';
@@ -16,6 +18,15 @@ export class GdeltIntelPanel extends Panel {
   private activeTopic: IntelTopic = getIntelTopics()[0]!;
   private topicData = new Map<string, TopicIntelligence>();
   private tabsEl: HTMLElement | null = null;
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateCommonVisibleElements(this.element, {
+      selector: '.panel-tab, .tab-label, .article-title',
+      limit: 10,
+    });
+  });
 
   constructor() {
     super({
@@ -26,8 +37,21 @@ export class GdeltIntelPanel extends Panel {
       infoTooltip: t('components.gdeltIntel.infoTooltip'),
       defaultRowSpan: 2,
     });
+    this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+    this.content.addEventListener('scroll', this.boundScrollHandler);
     this.createTabs();
     this.loadActiveTopic();
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   private createTabs(): void {
@@ -46,6 +70,7 @@ export class GdeltIntelPanel extends Panel {
     );
 
     this.element.insertBefore(this.tabsEl, this.content);
+    this.scheduleVisibleTranslations();
   }
 
   private selectTopic(topic: IntelTopic): void {
@@ -114,6 +139,7 @@ export class GdeltIntelPanel extends Panel {
         ...articles.map(article => this.buildArticle(article)),
       ),
     );
+    this.scheduleVisibleTranslations();
   }
 
   private buildArticle(article: GdeltArticle): HTMLElement {
@@ -142,5 +168,18 @@ export class GdeltIntelPanel extends Panel {
   public async refreshAll(): Promise<void> {
     this.topicData.clear();
     await this.loadActiveTopic();
+  }
+
+  public destroy(): void {
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
+    super.destroy();
   }
 }

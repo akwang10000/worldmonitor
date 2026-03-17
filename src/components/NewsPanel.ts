@@ -2,9 +2,9 @@ import { Panel } from './Panel';
 import { WindowedList } from './VirtualList';
 import type { NewsItem, ClusteredEvent, DeviationLevel, RelatedAsset, RelatedAssetContext } from '@/types';
 import { THREAT_PRIORITY } from '@/services/threat-classifier';
-import { formatTime, getCSSColor } from '@/utils';
+import { formatTime, getCSSColor, rafSchedule } from '@/utils';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
-import { analysisWorker, enrichWithVelocityML, getClusterAssetContext, MAX_DISTANCE_KM, activityTracker, generateSummary, translateText } from '@/services';
+import { analysisWorker, enrichWithVelocityML, getClusterAssetContext, MAX_DISTANCE_KM, activityTracker, generateSummary, translateTextCached, translateVisibleElements } from '@/services';
 import { getSourcePropagandaRisk, getSourceTier, getSourceType } from '@/config/feeds';
 import { SITE_VARIANT } from '@/config';
 import { t, getCurrentLanguage } from '@/services/i18n';
@@ -38,6 +38,14 @@ export class NewsPanel extends Panel {
   private renderRequestId = 0;
   private boundScrollHandler: (() => void) | null = null;
   private boundClickHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateVisibleElements(this.content, {
+      selector: '.item-title[data-translate-source]',
+      limit: 8,
+    });
+  });
 
   // Sort mode toggle (#107)
   private sortMode!: SortMode;
@@ -76,8 +84,22 @@ export class NewsPanel extends Panel {
         prepared.shouldHighlight,
         prepared.showNewTag
       ),
-      () => this.bindRelatedAssetEvents()
+      () => {
+        this.bindRelatedAssetEvents();
+        this.scheduleVisibleTranslations(0);
+      }
     );
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   private setupActivityTracking(): void {
@@ -93,6 +115,7 @@ export class NewsPanel extends Panel {
     // Mark as seen when panel content is scrolled
     this.boundScrollHandler = () => {
       activityTracker.markAsSeen(this.panelId);
+      this.scheduleVisibleTranslations(60);
     };
     this.content.addEventListener('scroll', this.boundScrollHandler);
 
@@ -264,18 +287,22 @@ export class NewsPanel extends Panel {
     const titleEl = element.closest('.item')?.querySelector('.item-title') as HTMLElement;
     if (!titleEl) return;
 
-    const originalText = titleEl.textContent || '';
+    const originalText = (titleEl.dataset.translateSource || titleEl.dataset.originalText || text || titleEl.textContent || '').trim();
+    if (!originalText) return;
+    titleEl.dataset.translateSource = originalText;
 
     // Visual feedback
     element.innerHTML = '...';
     element.style.pointerEvents = 'none';
 
     try {
-      const translated = await translateText(text, currentLang);
+      const translated = await translateTextCached(originalText, currentLang);
       if (!this.element?.isConnected) return;
       if (translated) {
         titleEl.textContent = translated;
         titleEl.dataset.original = originalText;
+        titleEl.dataset.originalText = originalText;
+        titleEl.dataset.translatedLang = currentLang;
         element.innerHTML = '✓';
         element.title = 'Original: ' + originalText;
         element.classList.add('translated');
@@ -445,7 +472,7 @@ export class NewsPanel extends Panel {
           ${item.lang && item.lang !== getCurrentLanguage() ? `<span class="lang-badge">${item.lang.toUpperCase()}</span>` : ''}
           ${item.isAlert ? '<span class="alert-tag">ALERT</span>' : ''}
         </div>
-        <a class="item-title" href="${sanitizeUrl(item.link)}" target="_blank" rel="noopener">${escapeHtml(item.title)}</a>
+        <a class="item-title" href="${sanitizeUrl(item.link)}" target="_blank" rel="noopener" data-translate-source="${escapeHtml(item.title)}" data-source-lang="${escapeHtml(item.lang || '')}">${escapeHtml(item.title)}</a>
         <div class="item-time">
           ${formatTime(item.pubDate)}
           ${getCurrentLanguage() !== 'en' ? `<button class="item-translate-btn" title="Translate" data-text="${escapeHtml(item.title)}">文</button>` : ''}
@@ -456,6 +483,7 @@ export class NewsPanel extends Panel {
       .join('');
 
     this.setContent(html);
+    this.scheduleVisibleTranslations();
   }
 
   private renderClusters(clusters: ClusteredEvent[]): void {
@@ -522,6 +550,7 @@ export class NewsPanel extends Panel {
         .map(p => this.renderClusterHtmlSafely(p.cluster, p.isNew, p.shouldHighlight, p.showNewTag))
         .join('');
       this.setContent(html);
+      this.scheduleVisibleTranslations();
     }
   }
 
@@ -658,7 +687,7 @@ export class NewsPanel extends Panel {
           ${cluster.isAlert ? '<span class="alert-tag">ALERT</span>' : ''}
           ${categoryBadge}
         </div>
-        <a class="item-title" href="${sanitizeUrl(cluster.primaryLink)}" target="_blank" rel="noopener">${escapeHtml(cluster.primaryTitle)}</a>
+        <a class="item-title" href="${sanitizeUrl(cluster.primaryLink)}" target="_blank" rel="noopener" data-translate-source="${escapeHtml(cluster.primaryTitle)}" data-source-lang="${escapeHtml(cluster.lang || '')}">${escapeHtml(cluster.primaryTitle)}</a>
         <div class="cluster-meta">
           <span class="top-sources">${topSourcesHtml}</span>
           <span class="item-time">${formatTime(cluster.lastUpdated)}</span>
@@ -733,6 +762,12 @@ export class NewsPanel extends Panel {
    * Clean up resources
    */
   public destroy(): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
+
     // Clean up windowed list
     this.windowedList?.destroy();
     this.windowedList = null;

@@ -1,19 +1,42 @@
 import { Panel } from './Panel';
+import { translateCommonVisibleElements } from '@/services';
 import { t } from '@/services/i18n';
 import type { Monitor, NewsItem } from '@/types';
 import { MONITOR_COLORS } from '@/config';
-import { generateId, formatTime, getCSSColor } from '@/utils';
+import { generateId, formatTime, getCSSColor, rafSchedule } from '@/utils';
 import { sanitizeUrl } from '@/utils/sanitize';
 import { h, replaceChildren, clearChildren } from '@/utils/dom-utils';
 
 export class MonitorPanel extends Panel {
   private monitors: Monitor[] = [];
   private onMonitorsChange?: (monitors: Monitor[]) => void;
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateCommonVisibleElements(this.content, {
+      selector: '.monitor-add-btn, .item-title',
+      limit: 10,
+    });
+  });
 
   constructor(initialMonitors: Monitor[] = []) {
     super({ id: 'monitors', title: t('panels.monitors') });
     this.monitors = initialMonitors;
+    this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+    this.content.addEventListener('scroll', this.boundScrollHandler);
     this.renderInput();
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   private renderInput(): void {
@@ -42,6 +65,7 @@ export class MonitorPanel extends Panel {
     this.content.appendChild(monitorsResults);
 
     this.renderMonitorsList();
+    this.scheduleVisibleTranslations();
   }
 
   private addMonitor(): void {
@@ -156,6 +180,7 @@ export class MonitorPanel extends Panel {
         ),
       ),
     );
+    this.scheduleVisibleTranslations();
   }
 
   public onChanged(callback: (monitors: Monitor[]) => void): void {
@@ -169,5 +194,18 @@ export class MonitorPanel extends Panel {
   public setMonitors(monitors: Monitor[]): void {
     this.monitors = monitors;
     this.renderMonitorsList();
+  }
+
+  public destroy(): void {
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
+    super.destroy();
   }
 }

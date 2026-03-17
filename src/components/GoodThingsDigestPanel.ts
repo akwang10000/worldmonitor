@@ -3,6 +3,8 @@ import type { NewsItem } from '@/types';
 import { generateSummary } from '@/services/summarization';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
+import { rafSchedule } from '@/utils';
+import { translateVisibleElements } from '@/services';
 
 /**
  * GoodThingsDigestPanel -- Displays the top 5 positive stories of the day,
@@ -15,10 +17,32 @@ import { t } from '@/services/i18n';
 export class GoodThingsDigestPanel extends Panel {
   private cardElements: HTMLElement[] = [];
   private summaryAbort: AbortController | null = null;
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateVisibleElements(this.content, {
+      selector: '.digest-card-title[data-translate-source]',
+      limit: 6,
+    });
+  });
 
   constructor() {
     super({ id: 'digest', title: '5 Good Things', trackActivity: false });
     this.content.innerHTML = '<p class="digest-placeholder">Loading today\u2019s digest\u2026</p>';
+    this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+    this.content.addEventListener('scroll', this.boundScrollHandler);
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   /**
@@ -53,7 +77,7 @@ export class GoodThingsDigestPanel extends Panel {
       card.innerHTML = `
         <span class="digest-card-number">${i + 1}</span>
         <div class="digest-card-body">
-          <a class="digest-card-title" href="${sanitizeUrl(item.link)}" target="_blank" rel="noopener">
+          <a class="digest-card-title" href="${sanitizeUrl(item.link)}" target="_blank" rel="noopener" data-translate-source="${escapeHtml(item.title)}">
             ${escapeHtml(item.title)}
           </a>
           <span class="digest-card-source">${escapeHtml(item.source)}</span>
@@ -64,9 +88,12 @@ export class GoodThingsDigestPanel extends Panel {
       this.cardElements.push(card);
     }
     this.content.appendChild(list);
+    this.scheduleVisibleTranslations();
 
     // Summarize in parallel with progressive updates
     const signal = this.summaryAbort.signal;
+    const { getCurrentLanguage } = await import('@/services/i18n');
+    const currentLang = getCurrentLanguage();
     await Promise.allSettled(top5.map(async (item, idx) => {
       if (signal.aborted || !this.element?.isConnected) return;
       try {
@@ -76,6 +103,7 @@ export class GoodThingsDigestPanel extends Panel {
           [item.title, item.source],
           undefined,
           item.locationName,
+          currentLang,
         );
         if (signal.aborted || !this.element?.isConnected) return;
         const summary = result?.summary ?? item.title.slice(0, 200);
@@ -104,6 +132,15 @@ export class GoodThingsDigestPanel extends Panel {
    * Clean up abort controller, card references, and parent resources.
    */
   public destroy(): void {
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
     if (this.summaryAbort) {
       this.summaryAbort.abort();
       this.summaryAbort = null;

@@ -1,6 +1,8 @@
 import { Panel } from './Panel';
+import { translateCommonVisibleElements } from '@/services';
 import { sanitizeUrl } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
+import { rafSchedule } from '@/utils';
 import { h, replaceChildren, safeHtml } from '@/utils/dom-utils';
 import {
   TELEGRAM_TOPICS,
@@ -16,6 +18,15 @@ export class TelegramIntelPanel extends Panel {
   private activeTopic = 'all';
   private tabsEl: HTMLElement | null = null;
   private relayEnabled = true;
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateCommonVisibleElements(this.element, {
+      selector: '.panel-tab, .telegram-intel-text, .telegram-follow-btn',
+      limit: 10,
+    });
+  });
 
   constructor() {
     super({
@@ -26,8 +37,21 @@ export class TelegramIntelPanel extends Panel {
       infoTooltip: t('components.telegramIntel.infoTooltip'),
       defaultRowSpan: 2,
     });
+    this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+    this.content.addEventListener('scroll', this.boundScrollHandler);
     this.createTabs();
     this.showLoading(t('components.telegramIntel.loading'));
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   private createTabs(): void {
@@ -41,6 +65,7 @@ export class TelegramIntelPanel extends Panel {
       ),
     );
     this.element.insertBefore(this.tabsEl, this.content);
+    this.scheduleVisibleTranslations();
   }
 
   private selectTopic(topicId: string): void {
@@ -90,6 +115,7 @@ export class TelegramIntelPanel extends Panel {
         ...filtered.map(item => this.buildItem(item)),
       ),
     );
+    this.scheduleVisibleTranslations();
   }
 
   private buildItem(item: TelegramItem): HTMLElement {
@@ -152,6 +178,15 @@ export class TelegramIntelPanel extends Panel {
   }
 
   public destroy(): void {
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
     if (this.tabsEl) {
       this.tabsEl.remove();
       this.tabsEl = null;

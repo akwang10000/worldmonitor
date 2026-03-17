@@ -7,14 +7,15 @@ import { focalPointDetector } from '@/services/focal-point-detector';
 import { stripOrefLabels } from '@/services/oref-alerts';
 import { ingestNewsForCII } from '@/services/country-instability';
 import { getTheaterPostureSummaries } from '@/services/military-surge';
-import { isMobileDevice } from '@/utils';
+import { isMobileDevice, rafSchedule } from '@/utils';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 import { SITE_VARIANT } from '@/config';
 import { deletePersistentCache, getPersistentCache, setPersistentCache } from '@/services/persistent-cache';
-import { t } from '@/services/i18n';
+import { t, getCurrentLanguage } from '@/services/i18n';
 import { isDesktopRuntime } from '@/services/runtime';
 import { getAiFlowSettings, isAnyAiProviderEnabled, subscribeAiFlowChange } from '@/services/ai-flow-settings';
 import { getServerInsights, type ServerInsights, type ServerInsightStory } from '@/services/insights-loader';
+import { translateVisibleElements } from '@/services/visible-translation';
 import type { ClusteredEvent, FocalPoint, MilitaryFlight } from '@/types';
 
 export class InsightsPanel extends Panel {
@@ -27,6 +28,15 @@ export class InsightsPanel extends Panel {
   private lastClusters: ClusteredEvent[] = [];
   private aiFlowUnsubscribe: (() => void) | null = null;
   private updateGeneration = 0;
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateVisibleElements(this.content, {
+      selector: '[data-translate-source], .insight-badge, .insights-section-title',
+      limit: 8,
+    });
+  });
   private static readonly BRIEF_COOLDOWN_MS = 120000; // 2 min cooldown (API has limits)
   private static readonly BRIEF_CACHE_KEY = 'summary:world-brief';
 
@@ -38,6 +48,11 @@ export class InsightsPanel extends Panel {
       infoTooltip: t('components.insights.infoTooltip'),
     });
 
+    this.boundScrollHandler = () => {
+      this.scheduleVisibleTranslations(60);
+    };
+    this.content.addEventListener('scroll', this.boundScrollHandler);
+
     // Web-only: subscribe to AI flow changes so toggling providers re-runs analysis
     // Skip on mobile — only server-side insights are used there (no client-side AI)
     if (!isDesktopRuntime() && !isMobileDevice()) {
@@ -46,6 +61,21 @@ export class InsightsPanel extends Panel {
         void this.onAiFlowChanged();
       });
     }
+  }
+
+  private translateLabel(key: string, defaultValue: string, options?: Record<string, unknown>): string {
+    return t(key, { defaultValue, ...(options || {}) });
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   public setMilitaryFlights(flights: MilitaryFlight[]): void {
@@ -294,7 +324,7 @@ export class InsightsPanel extends Panel {
       }
 
       // Step 1: Signal aggregation (client-side, depends on real-time map data)
-      this.setProgress(1, totalSteps, 'Loading server insights...');
+      this.setProgress(1, totalSteps, this.translateLabel('components.insights.loadingServerInsights', 'Loading server insights...'));
 
       let signalSummary: ReturnType<typeof signalAggregator.getSummary>;
       let focalSummary: ReturnType<typeof focalPointDetector.analyze>;
@@ -449,8 +479,8 @@ export class InsightsPanel extends Panel {
           : '';
         const result = await generateSummary(titles, (_step, _total, msg) => {
           // Show sub-progress for summarization
-          this.setProgress(3, totalSteps, `Generating brief: ${msg}`);
-        }, geoContext, undefined, summarizeOpts);
+          this.setProgress(3, totalSteps, `${this.translateLabel('components.insights.generatingBrief', 'Generating world brief...')}: ${msg}`);
+        }, geoContext, getCurrentLanguage(), summarizeOpts);
 
         if (this.updateGeneration !== thisGeneration) return;
 
@@ -461,13 +491,13 @@ export class InsightsPanel extends Panel {
           void setPersistentCache(InsightsPanel.BRIEF_CACHE_KEY, { summary: worldBrief });
         }
       } else {
-        this.setProgress(3, totalSteps, 'Using cached brief...');
+        this.setProgress(3, totalSteps, this.translateLabel('components.insights.usingCachedBrief', 'Using cached brief...'));
       }
 
       this.setDataBadge(worldBrief ? 'live' : 'unavailable');
 
       // Step 4: Wait for parallel analysis to complete
-      this.setProgress(4, totalSteps, 'Multi-perspective analysis...');
+      this.setProgress(4, totalSteps, this.translateLabel('components.insights.multiPerspectiveAnalysis', 'Multi-perspective analysis...'));
       await parallelPromise;
 
       if (this.updateGeneration !== thisGeneration) return;
@@ -499,11 +529,12 @@ export class InsightsPanel extends Panel {
       ${sentimentOverview}
       ${statsHtml}
       <div class="insights-section">
-        <div class="insights-section-title">BREAKING & CONFIRMED</div>
+        <div class="insights-section-title">${escapeHtml(this.translateLabel('components.insights.breakingConfirmed', 'BREAKING & CONFIRMED'))}</div>
         ${breakingHtml}
       </div>
       ${missedHtml}
     `);
+    this.scheduleVisibleTranslations();
   }
 
   private renderServerInsights(
@@ -525,11 +556,12 @@ export class InsightsPanel extends Panel {
       ${sentimentOverview}
       ${statsHtml}
       <div class="insights-section">
-        <div class="insights-section-title">BREAKING & CONFIRMED</div>
+        <div class="insights-section-title">${escapeHtml(this.translateLabel('components.insights.breakingConfirmed', 'BREAKING & CONFIRMED'))}</div>
         ${storiesHtml}
       </div>
       ${missedHtml}
     `);
+    this.scheduleVisibleTranslations();
   }
 
   private renderServerStories(
@@ -563,7 +595,7 @@ export class InsightsPanel extends Panel {
         <div class="insight-story">
           <div class="insight-story-header">
             <span class="insight-sentiment-dot ${sentimentClass}"></span>
-            <span class="insight-story-title">${escapeHtml(story.primaryTitle.slice(0, 100))}${story.primaryTitle.length > 100 ? '...' : ''}</span>
+            <span class="insight-story-title" data-translate-source="${escapeHtml(story.primaryTitle)}" data-translate-max-length="100">${escapeHtml(story.primaryTitle.slice(0, 100))}${story.primaryTitle.length > 100 ? '...' : ''}</span>
           </div>
           ${badges.length > 0 ? `<div class="insight-badges">${badges.join('')}</div>` : ''}
         </div>
@@ -576,15 +608,15 @@ export class InsightsPanel extends Panel {
       <div class="insights-stats">
         <div class="insight-stat">
           <span class="insight-stat-value">${insights.multiSourceCount}</span>
-          <span class="insight-stat-label">Multi-source</span>
+          <span class="insight-stat-label">${escapeHtml(this.translateLabel('components.insights.multiSource', 'Multi-source'))}</span>
         </div>
         <div class="insight-stat">
           <span class="insight-stat-value">${insights.fastMovingCount}</span>
-          <span class="insight-stat-label">Fast-moving</span>
+          <span class="insight-stat-label">${escapeHtml(this.translateLabel('components.insights.fastMoving', 'Fast-moving'))}</span>
         </div>
         <div class="insight-stat">
           <span class="insight-stat-value">${insights.clusterCount}</span>
-          <span class="insight-stat-label">Clusters</span>
+          <span class="insight-stat-label">${escapeHtml(this.translateLabel('components.insights.clusters', 'Clusters'))}</span>
         </div>
       </div>
     `;
@@ -594,7 +626,7 @@ export class InsightsPanel extends Panel {
     return `
       <div class="insights-brief">
         <div class="insights-section-title">${SITE_VARIANT === 'tech' ? '🚀 TECH BRIEF' : '🌍 WORLD BRIEF'}</div>
-        <div class="insights-brief-text">${escapeHtml(brief)}</div>
+        <div class="insights-brief-text" data-translate-source="${escapeHtml(brief)}">${escapeHtml(brief)}</div>
       </div>
     `;
   }
@@ -629,7 +661,7 @@ export class InsightsPanel extends Panel {
         <div class="insight-story">
           <div class="insight-story-header">
             <span class="insight-sentiment-dot ${sentimentClass}"></span>
-            <span class="insight-story-title">${escapeHtml(cluster.primaryTitle.slice(0, 100))}${cluster.primaryTitle.length > 100 ? '...' : ''}</span>
+            <span class="insight-story-title" data-translate-source="${escapeHtml(cluster.primaryTitle)}" data-translate-max-length="100">${escapeHtml(cluster.primaryTitle.slice(0, 100))}${cluster.primaryTitle.length > 100 ? '...' : ''}</span>
           </div>
           ${badges.length > 0 ? `<div class="insight-badges">${badges.join('')}</div>` : ''}
         </div>
@@ -651,13 +683,13 @@ export class InsightsPanel extends Panel {
     const neuPct = Math.round((neutral / total) * 100);
     const posPct = 100 - negPct - neuPct;
 
-    let toneLabel = 'Mixed';
+    let toneLabel = this.translateLabel('components.insights.mixed', 'Mixed');
     let toneClass = 'neutral';
     if (negative > positive + neutral) {
-      toneLabel = 'Negative';
+      toneLabel = this.translateLabel('components.insights.negative', 'Negative');
       toneClass = 'negative';
     } else if (positive > negative + neutral) {
-      toneLabel = 'Positive';
+      toneLabel = this.translateLabel('components.insights.positive', 'Positive');
       toneClass = 'positive';
     }
 
@@ -673,7 +705,7 @@ export class InsightsPanel extends Panel {
           <span class="sentiment-label neutral">${neutral}</span>
           <span class="sentiment-label positive">${positive}</span>
         </div>
-        <div class="sentiment-tone ${toneClass}">Overall: ${toneLabel}</div>
+        <div class="sentiment-tone ${toneClass}">${escapeHtml(this.translateLabel('components.insights.overall', 'Overall'))}: ${escapeHtml(toneLabel)}</div>
       </div>
     `;
   }
@@ -687,16 +719,16 @@ export class InsightsPanel extends Panel {
       <div class="insights-stats">
         <div class="insight-stat">
           <span class="insight-stat-value">${multiSource}</span>
-          <span class="insight-stat-label">Multi-source</span>
+          <span class="insight-stat-label">${escapeHtml(this.translateLabel('components.insights.multiSource', 'Multi-source'))}</span>
         </div>
         <div class="insight-stat">
           <span class="insight-stat-value">${fastMoving}</span>
-          <span class="insight-stat-label">Fast-moving</span>
+          <span class="insight-stat-label">${escapeHtml(this.translateLabel('components.insights.fastMoving', 'Fast-moving'))}</span>
         </div>
         ${alerts > 0 ? `
         <div class="insight-stat alert">
           <span class="insight-stat-value">${alerts}</span>
-          <span class="insight-stat-label">Alerts</span>
+          <span class="insight-stat-label">${escapeHtml(this.translateLabel('components.insights.alerts', 'Alerts'))}</span>
         </div>
         ` : ''}
       </div>
@@ -720,7 +752,7 @@ export class InsightsPanel extends Panel {
         <div class="insight-story missed">
           <div class="insight-story-header">
             <span class="insight-sentiment-dot ml-flagged"></span>
-            <span class="insight-story-title">${escapeHtml(story.title.slice(0, 80))}${story.title.length > 80 ? '...' : ''}</span>
+            <span class="insight-story-title" data-translate-source="${escapeHtml(story.title)}" data-translate-max-length="80">${escapeHtml(story.title.slice(0, 80))}${story.title.length > 80 ? '...' : ''}</span>
           </div>
           <div class="insight-badges">
             <span class="insight-badge ml-detected">🔬 ${perspectiveName}: ${(perspectiveScore * 100).toFixed(0)}%</span>
@@ -854,6 +886,15 @@ export class InsightsPanel extends Panel {
   }
 
   public override destroy(): void {
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
     this.aiFlowUnsubscribe?.();
     super.destroy();
   }

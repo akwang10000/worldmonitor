@@ -3,9 +3,10 @@ import type { NewsItem } from '@/types';
 import type { HappyContentCategory } from '@/services/positive-classifier';
 import { HAPPY_CATEGORY_ALL, HAPPY_CATEGORY_LABELS } from '@/services/positive-classifier';
 import { shareHappyCard } from '@/services/happy-share-renderer';
-import { formatTime } from '@/utils';
+import { formatTime, rafSchedule } from '@/utils';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 import { t } from '@/services/i18n';
+import { translateVisibleElements } from '@/services';
 
 /**
  * PositiveNewsFeedPanel -- scrolling positive news feed with category filter bar
@@ -17,10 +18,32 @@ export class PositiveNewsFeedPanel extends Panel {
   private filteredItems: NewsItem[] = [];
   private filterButtons: Map<string, HTMLButtonElement> = new Map();
   private filterClickHandlers: Map<HTMLButtonElement, () => void> = new Map();
+  private boundScrollHandler: (() => void) | null = null;
+  private visibleTranslationTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly runVisibleTranslationPass = rafSchedule(() => {
+    if (!this.element?.isConnected) return;
+    void translateVisibleElements(this.element, {
+      selector: '.positive-filter-btn[data-translate-source], .positive-card-title[data-translate-source], .positive-card-category[data-translate-source]',
+      limit: 14,
+    });
+  });
 
   constructor() {
     super({ id: 'positive-feed', title: 'Good News Feed', showCount: true, trackActivity: true });
     this.createFilterBar();
+    this.boundScrollHandler = () => this.scheduleVisibleTranslations(60);
+    this.content.addEventListener('scroll', this.boundScrollHandler);
+  }
+
+  private scheduleVisibleTranslations(delay = 220): void {
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+    }
+
+    this.visibleTranslationTimer = setTimeout(() => {
+      this.visibleTranslationTimer = null;
+      this.runVisibleTranslationPass();
+    }, Math.max(0, delay));
   }
 
   /**
@@ -35,6 +58,7 @@ export class PositiveNewsFeedPanel extends Panel {
     const allBtn = document.createElement('button');
     allBtn.className = 'positive-filter-btn active';
     allBtn.textContent = 'All';
+    allBtn.dataset.translateSource = 'All';
     allBtn.dataset.category = 'all';
     const allHandler = () => this.setFilter('all');
     allBtn.addEventListener('click', allHandler);
@@ -47,6 +71,7 @@ export class PositiveNewsFeedPanel extends Panel {
       const btn = document.createElement('button');
       btn.className = 'positive-filter-btn';
       btn.textContent = HAPPY_CATEGORY_LABELS[category];
+      btn.dataset.translateSource = HAPPY_CATEGORY_LABELS[category];
       btn.dataset.category = category;
       const handler = () => this.setFilter(category);
       btn.addEventListener('click', handler);
@@ -57,6 +82,7 @@ export class PositiveNewsFeedPanel extends Panel {
 
     // Insert filter bar before content
     this.element.insertBefore(filterBar, this.content);
+    this.scheduleVisibleTranslations();
   }
 
   /**
@@ -111,6 +137,7 @@ export class PositiveNewsFeedPanel extends Panel {
     }
 
     this.content.innerHTML = items.map((item, idx) => this.renderCard(item, idx)).join('');
+    this.scheduleVisibleTranslations();
 
     // Delegated click handler for share buttons (remove first to avoid stacking)
     this.content.removeEventListener('click', this.handleShareClick);
@@ -152,7 +179,7 @@ export class PositiveNewsFeedPanel extends Panel {
 
     const categoryLabel = item.happyCategory ? HAPPY_CATEGORY_LABELS[item.happyCategory] : '';
     const categoryBadgeHtml = item.happyCategory
-      ? `<span class="positive-card-category cat-${escapeHtml(item.happyCategory)}">${escapeHtml(categoryLabel)}</span>`
+      ? `<span class="positive-card-category cat-${escapeHtml(item.happyCategory)}" data-translate-source="${escapeHtml(categoryLabel)}">${escapeHtml(categoryLabel)}</span>`
       : '';
 
     return `<a class="positive-card" href="${sanitizeUrl(item.link)}" target="_blank" rel="noopener" data-category="${escapeHtml(item.happyCategory || '')}">
@@ -162,7 +189,7 @@ export class PositiveNewsFeedPanel extends Panel {
       <span class="positive-card-source">${escapeHtml(item.source)}</span>
       ${categoryBadgeHtml}
     </div>
-    <span class="positive-card-title">${escapeHtml(item.title)}</span>
+    <span class="positive-card-title" data-translate-source="${escapeHtml(item.title)}">${escapeHtml(item.title)}</span>
     <span class="positive-card-time">${formatTime(item.pubDate)}</span>
     <button class="positive-card-share" aria-label="Share this story" data-idx="${idx}">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -179,6 +206,15 @@ export class PositiveNewsFeedPanel extends Panel {
    * Clean up event listeners and call parent destroy.
    */
   public destroy(): void {
+    if (this.boundScrollHandler) {
+      this.content.removeEventListener('scroll', this.boundScrollHandler);
+      this.boundScrollHandler = null;
+    }
+    if (this.visibleTranslationTimer) {
+      clearTimeout(this.visibleTranslationTimer);
+      this.visibleTranslationTimer = null;
+    }
+    this.runVisibleTranslationPass.cancel();
     for (const [btn, handler] of this.filterClickHandlers) {
       btn.removeEventListener('click', handler);
     }
